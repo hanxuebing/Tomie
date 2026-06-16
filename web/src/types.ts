@@ -23,6 +23,14 @@ export interface TaskDetail extends Task {
   sources: TaskSourceItem[]
   generations: GenerationItem[]
   is_running: boolean
+  running_generation?: {
+    sequence_num: number
+    prompt: string
+    based_on: 'source' | 'previous'
+    parent_generation_id: string | null
+    parent_sequence_num: number | null
+    replace_generation_id: string | null
+  } | null
 }
 
 export interface TaskSourceItem extends TaskSource {

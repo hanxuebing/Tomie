@@ -10,8 +10,18 @@ import type { Task, Article, Generation, TaskSource, GenerateRequest } from '../
 const router = Router();
 const ARTICLES_DIR = path.resolve(import.meta.dirname, '../../data/articles');
 
-// Track running tasks for cancellation
-const runningTasks = new Map<string, AbortController>();
+// Track running tasks — carries generation metadata + content buffer for SSE reconnect
+interface RunningGeneration {
+  controller: AbortController
+  sequence_num: number
+  prompt: string
+  based_on: 'source' | 'previous'
+  parent_generation_id: string | null
+  parent_sequence_num: number | null
+  replace_generation_id: string | null
+  buffer: string
+}
+const runningTasks = new Map<string, RunningGeneration>();
 // Track SSE connections per task
 const sseConnections = new Map<string, Set<Response>>();
 
@@ -100,11 +110,20 @@ router.get('/:id', (req, res) => {
     file_found: checkFileExists(g.file_path),
   }));
 
+  const running = runningTasks.get(task.id);
   res.json({
     ...task,
     sources: sourcesWithStatus,
     generations: generationsWithStatus,
-    is_running: runningTasks.has(task.id),
+    is_running: !!running,
+    running_generation: running ? {
+      sequence_num: running.sequence_num,
+      prompt: running.prompt,
+      based_on: running.based_on,
+      parent_generation_id: running.parent_generation_id,
+      parent_sequence_num: running.parent_sequence_num,
+      replace_generation_id: running.replace_generation_id,
+    } : null,
   });
 });
 
@@ -181,8 +200,42 @@ router.post('/:id/generate', async (req: Request, res: Response) => {
     return;
   }
 
+  // Compute metadata synchronously so we can register before responding
+  let sequenceNum: number;
+  if (replace_generation_id) {
+    const replacedGen = db.query(
+      'SELECT sequence_num FROM generations WHERE id = ? AND task_id = ?'
+    ).get(replace_generation_id, task.id) as { sequence_num: number } | null;
+    if (!replacedGen) {
+      res.status(400).json({ error: '要替换的生成记录不存在' });
+      return;
+    }
+    sequenceNum = replacedGen.sequence_num;
+  } else {
+    const lastGen = db.query(
+      'SELECT MAX(sequence_num) as max_seq FROM generations WHERE task_id = ?'
+    ).get(task.id) as { max_seq: number | null } | null;
+    sequenceNum = (lastGen?.max_seq || 0) + 1;
+  }
+
+  let parentSequenceNum: number | null = null;
+  if (parent_generation_id) {
+    const pg = db.query('SELECT sequence_num FROM generations WHERE id = ?')
+      .get(parent_generation_id) as { sequence_num: number } | null;
+    parentSequenceNum = pg?.sequence_num ?? null;
+  }
+
   const abortController = new AbortController();
-  runningTasks.set(task.id, abortController);
+  runningTasks.set(task.id, {
+    controller: abortController,
+    sequence_num: sequenceNum,
+    prompt,
+    based_on: based_on || 'source',
+    parent_generation_id: parent_generation_id || null,
+    parent_sequence_num: parentSequenceNum,
+    replace_generation_id: replace_generation_id || null,
+    buffer: '',
+  });
 
   // Respond immediately
   res.json({ message: '生成已开始' });
@@ -213,24 +266,6 @@ router.post('/:id/generate', async (req: Request, res: Response) => {
       }
     }
 
-    // Determine sequence number (replace reuses the old one; new appends)
-    let sequenceNum: number;
-    if (replace_generation_id) {
-      const replacedGen = db.query(
-        'SELECT sequence_num FROM generations WHERE id = ? AND task_id = ?'
-      ).get(replace_generation_id, task.id) as { sequence_num: number } | null;
-      if (!replacedGen) {
-        sendSSE(task.id, 'error', { message: '要替换的生成记录不存在' });
-        return;
-      }
-      sequenceNum = replacedGen.sequence_num;
-    } else {
-      const lastGen = db.query(
-        'SELECT MAX(sequence_num) as max_seq FROM generations WHERE task_id = ?'
-      ).get(task.id) as { max_seq: number | null } | null;
-      sequenceNum = (lastGen?.max_seq || 0) + 1;
-    }
-
     sendSSE(task.id, 'start', { sequence_num: sequenceNum });
 
     const agentInput: AgentInput = {
@@ -243,8 +278,13 @@ router.post('/:id/generate', async (req: Request, res: Response) => {
     const fullContent = await runGeneration({
       input: agentInput,
       onEvent: (event) => {
-        if (event.type === 'chunk') sendSSE(task.id, 'chunk', { content: event.content });
-        else if (event.type === 'step') sendSSE(task.id, 'step', { step: event.step });
+        if (event.type === 'chunk') {
+          const running = runningTasks.get(task.id);
+          if (running) running.buffer += event.content;
+          sendSSE(task.id, 'chunk', { content: event.content });
+        } else if (event.type === 'step') {
+          sendSSE(task.id, 'step', { step: event.step });
+        }
       },
       signal: abortController.signal,
     });
@@ -311,6 +351,12 @@ router.get('/:id/stream', (req: Request, res: Response) => {
   // Send initial connection message
   res.write(`event: connected\ndata: ${JSON.stringify({ taskId })}\n\n`);
 
+  // Replay buffered content so reconnecting clients recover earlier chunks
+  const runningInfo = runningTasks.get(taskId);
+  if (runningInfo?.buffer) {
+    res.write(`event: chunk\ndata: ${JSON.stringify({ content: runningInfo.buffer })}\n\n`);
+  }
+
   req.on('close', () => {
     sseConnections.get(taskId)?.delete(res);
     if (sseConnections.get(taskId)?.size === 0) {
@@ -332,7 +378,7 @@ router.put('/:id/complete', (req, res) => {
 
   // Cancel if running
   const ctrl = runningTasks.get(task.id);
-  if (ctrl) ctrl.abort();
+  if (ctrl) ctrl.controller.abort();
   runningTasks.delete(task.id);
 
   res.json({ success: true });
@@ -351,7 +397,7 @@ router.put('/:id/cancel', (req, res) => {
 
   // Cancel if running
   const ctrl = runningTasks.get(task.id);
-  if (ctrl) ctrl.abort();
+  if (ctrl) ctrl.controller.abort();
   runningTasks.delete(task.id);
 
   res.json({ success: true });
@@ -367,7 +413,7 @@ router.delete('/:id', (req, res) => {
 
   // Cancel if running
   const ctrl = runningTasks.get(task.id);
-  if (ctrl) ctrl.abort();
+  if (ctrl) ctrl.controller.abort();
   runningTasks.delete(task.id);
 
   // Delete task records but keep articles

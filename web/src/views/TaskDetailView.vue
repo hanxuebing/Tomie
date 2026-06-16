@@ -26,10 +26,49 @@ const sourcesExpanded = ref(true)
 // Generation input
 const genPrompt = ref('')
 const selectedBase = ref<GenerationItem | null>(null)
+const selectedGenId = ref<string | null>(null)
 
 const baseLabel = computed(() =>
   selectedBase.value ? `#${selectedBase.value.sequence_num}` : '源文章'
 )
+
+// In-progress placeholder shown in the history timeline while generating
+const PENDING_ID = '__pending__'
+const pendingGen = ref<GenerationItem | null>(null)
+
+const displayGenerations = computed<GenerationItem[]>(() => {
+  const list = task.value?.generations ?? []
+  const p = pendingGen.value
+  if (!p) return list
+  if (list.some((g) => g.sequence_num === p.sequence_num)) {
+    return list.map((g) => (g.sequence_num === p.sequence_num ? p : g))
+  }
+  return [...list, p]
+})
+
+function makePending(opts: {
+  prompt: string
+  based_on: 'source' | 'previous'
+  sequence_num: number
+  parent_sequence_num: number | null
+}): GenerationItem {
+  return {
+    id: PENDING_ID,
+    task_id: taskId,
+    article_id: '',
+    prompt: opts.prompt,
+    based_on: opts.based_on,
+    parent_generation_id: null,
+    sequence_num: opts.sequence_num,
+    created_at: new Date().toISOString(),
+    replaced_by: null,
+    article_title: '生成中…',
+    file_path: '',
+    file_found: false,
+    parent_sequence_num: opts.parent_sequence_num,
+    pending: true,
+  }
+}
 
 // Model selection
 const textModels = ref<LLMModel[]>([])
@@ -74,6 +113,8 @@ async function fetchTask() {
   try {
     const res = await api.get<TaskDetail>(`/tasks/${taskId}`)
     task.value = res.data
+    // Server data is authoritative now — drop the in-progress placeholder
+    pendingGen.value = null
     // Keep the selected base pointing at the current slot (ids change on replace)
     if (selectedBase.value) {
       selectedBase.value =
@@ -112,21 +153,28 @@ function viewGenerationArticle(articleId: string) {
 }
 
 async function selectGeneration(gen: GenerationItem) {
-  await loadArticleContent(gen.article_id)
-}
-
-function setBase(gen: GenerationItem) {
+  selectedGenId.value = gen.id
   selectedBase.value = gen
+  await loadArticleContent(gen.article_id)
 }
 
 function resetBase() {
   selectedBase.value = null
+  selectedGenId.value = null
 }
 
 async function doRegenerate(gen: GenerationItem) {
   if (isStreaming.value) return
   streamingContent.value = ''
   isStreaming.value = true
+
+  // Insert pending placeholder at the same slot
+  pendingGen.value = makePending({
+    prompt: gen.prompt,
+    based_on: gen.based_on,
+    sequence_num: gen.sequence_num,
+    parent_sequence_num: gen.parent_sequence_num ?? null,
+  })
 
   try {
     const payload: Record<string, unknown> = {
@@ -142,6 +190,7 @@ async function doRegenerate(gen: GenerationItem) {
     await api.post(`/tasks/${taskId}/generate`, payload)
   } catch {
     closeSSE()
+    pendingGen.value = null
     window.alert('重新生成请求失败')
     isStreaming.value = false
   }
@@ -152,10 +201,26 @@ async function doGenerate() {
   streamingContent.value = ''
   isStreaming.value = true
 
+  const prompt = genPrompt.value.trim()
+  const basedOn: 'source' | 'previous' = selectedBase.value ? 'previous' : 'source'
+  const parentSeqNum = selectedBase.value?.sequence_num ?? null
+
+  // Calculate next sequence_num
+  const gens = task.value?.generations ?? []
+  const maxSeq = gens.length ? Math.max(...gens.map((g) => g.sequence_num)) : 0
+
+  // Insert pending placeholder
+  pendingGen.value = makePending({
+    prompt,
+    based_on: basedOn,
+    sequence_num: maxSeq + 1,
+    parent_sequence_num: parentSeqNum,
+  })
+
   try {
     const payload: Record<string, unknown> = {
-      prompt: genPrompt.value.trim(),
-      based_on: selectedBase.value ? 'previous' : 'source',
+      prompt,
+      based_on: basedOn,
     }
     if (selectedBase.value) {
       payload.parent_generation_id = selectedBase.value.id
@@ -167,6 +232,7 @@ async function doGenerate() {
     genPrompt.value = ''
   } catch {
     closeSSE()
+    pendingGen.value = null
     window.alert('生成请求失败，请稍后重试')
     isStreaming.value = false
   }
@@ -447,15 +513,14 @@ onUnmounted(() => {
             <div>
               <p class="mb-2 text-sm font-semibold text-text">生成历史</p>
               <GenerationHistory
-                :generations="task.generations"
+                :generations="displayGenerations"
                 :can-regenerate="task.status === 'running' && !isStreaming"
-                :base-id="selectedBase?.id ?? null"
+                :selected-id="selectedGenId"
                 @view="viewGenerationArticle"
                 @select="selectGeneration"
-                @base="setBase"
                 @regenerate="doRegenerate"
               />
-              <p v-if="!task.generations.length" class="py-2 text-center text-xs text-text-muted">
+              <p v-if="!displayGenerations.length" class="py-2 text-center text-xs text-text-muted">
                 暂无生成记录
               </p>
             </div>

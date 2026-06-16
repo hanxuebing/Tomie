@@ -5,15 +5,14 @@ withDefaults(
   defineProps<{
     generations: GenerationItem[]
     canRegenerate?: boolean
-    baseId?: string | null
+    selectedId?: string | null
   }>(),
-  { canRegenerate: false, baseId: null }
+  { canRegenerate: false, selectedId: null }
 )
 
 const emit = defineEmits<{
   (e: 'view', articleId: string): void
   (e: 'select', generation: GenerationItem): void
-  (e: 'base', generation: GenerationItem): void
   (e: 'regenerate', generation: GenerationItem): void
 }>()
 
@@ -57,9 +56,11 @@ function truncate(text: string, max = 60): string {
       <div
         class="absolute -left-6 top-1 flex h-[22px] w-[22px] items-center justify-center rounded-full border-2 text-[10px] font-bold"
         :class="
-          idx === generations.length - 1
-            ? 'border-primary bg-primary text-white'
-            : 'border-border bg-card text-text-secondary'
+          gen.pending
+            ? 'border-amber-400 bg-amber-400 text-white animate-pulse'
+            : gen.id === selectedId
+              ? 'border-primary bg-primary text-white'
+              : 'border-border bg-card text-text-secondary'
         "
       >
         {{ gen.sequence_num }}
@@ -69,31 +70,44 @@ function truncate(text: string, max = 60): string {
       <div
         class="rounded-lg border p-3 transition-colors"
         :class="
-          gen.id === baseId
-            ? 'border-primary bg-primary-light/60 ring-1 ring-primary'
-            : idx === generations.length - 1
-              ? 'border-primary/30 bg-primary-light/40'
-              : 'border-border bg-card'
+          gen.pending
+            ? 'border-amber-300 bg-amber-50'
+            : gen.id === selectedId
+              ? 'cursor-pointer border-primary/50 bg-primary-light/30 hover:bg-primary-light/40'
+              : 'cursor-pointer border-border bg-card hover:bg-slate-50'
         "
+        @click="!gen.pending && emit('select', gen)"
       >
         <!-- Title row (click to preview) -->
         <div
-          class="flex cursor-pointer items-center justify-between gap-2"
-          @click="emit('select', gen)"
+          class="flex items-center justify-between gap-2"
+          :class="gen.pending ? '' : 'cursor-pointer'"
+          @click="!gen.pending && emit('select', gen)"
         >
           <span class="text-sm font-semibold text-text">
             {{ gen.article_title }}
           </span>
-          <span class="shrink-0 text-xs text-text-muted">
+          <span
+            v-if="gen.pending"
+            class="flex shrink-0 items-center gap-1 text-xs font-medium text-amber-600"
+          >
+            <span class="relative flex h-2 w-2">
+              <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+              <span class="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
+            </span>
+            生成中…
+          </span>
+          <span v-else class="shrink-0 text-xs text-text-muted">
             {{ formatDate(gen.created_at) }}
           </span>
         </div>
 
         <!-- Prompt (click to preview) -->
         <p
-          class="mt-1 cursor-pointer text-xs text-text-secondary"
+          class="mt-1 text-xs text-text-secondary"
+          :class="gen.pending ? '' : 'cursor-pointer'"
           :title="gen.prompt"
-          @click="emit('select', gen)"
+          @click="!gen.pending && emit('select', gen)"
         >
           {{ truncate(gen.prompt) }}
         </p>
@@ -103,15 +117,9 @@ function truncate(text: string, max = 60): string {
           <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-text-secondary">
             {{ basedOnText(gen) }}
           </span>
-          <span
-            v-if="gen.id === baseId"
-            class="rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-white"
-          >
-            当前基础
-          </span>
 
-          <!-- Actions -->
-          <div class="ml-auto flex items-center gap-2">
+          <!-- Actions (hidden for pending) -->
+          <div v-if="!gen.pending" class="ml-auto flex items-center gap-2">
             <template v-if="gen.file_found">
               <button
                 type="button"
@@ -132,14 +140,6 @@ function truncate(text: string, max = 60): string {
               </svg>
               文章未找到
             </span>
-
-            <button
-              type="button"
-              class="rounded-md border border-border px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-slate-50 hover:text-text"
-              @click.stop="emit('base', gen)"
-            >
-              基于此修改
-            </button>
 
             <button
               v-if="canRegenerate"

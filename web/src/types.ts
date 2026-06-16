@@ -36,6 +36,7 @@ export interface GenerationItem extends Generation {
   file_path: string
   file_found: boolean
   parent_sequence_num?: number | null
+  pending?: boolean
 }
 
 // ── LLM Config (multi-model) ──

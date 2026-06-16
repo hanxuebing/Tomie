@@ -20,6 +20,51 @@ const displayTitle = ref('')
 const streamingContent = ref('')
 const isStreaming = ref(false)
 
+// Copy
+const copyTextSuccess = ref(false)
+const copyMdSuccess = ref(false)
+let copyTextTimer: number | null = null
+let copyMdTimer: number | null = null
+
+function getContentText(): string {
+  return isStreaming.value ? streamingContent.value : displayContent.value
+}
+
+async function copyAsPlainText() {
+  const md = getContentText()
+  if (!md) return
+  try {
+    const plain = md
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/\*\*(.+?)\*\*/g, '$1')
+      .replace(/\*(.+?)\*/g, '$1')
+      .replace(/`(.+?)`/g, '$1')
+      .replace(/\[(.+?)\]\(.+?\)/g, '$1')
+      .replace(/^[-*+]\s+/gm, '')
+      .replace(/^>\s+/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
+    await navigator.clipboard.writeText(plain.trim())
+    copyTextSuccess.value = true
+    if (copyTextTimer) clearTimeout(copyTextTimer)
+    copyTextTimer = window.setTimeout(() => { copyTextSuccess.value = false }, 2000)
+  } catch {
+    window.alert('复制失败')
+  }
+}
+
+async function copyAsMarkdown() {
+  const md = getContentText()
+  if (!md) return
+  try {
+    await navigator.clipboard.writeText(md)
+    copyMdSuccess.value = true
+    if (copyMdTimer) clearTimeout(copyMdTimer)
+    copyMdTimer = window.setTimeout(() => { copyMdSuccess.value = false }, 2000)
+  } catch {
+    window.alert('复制失败')
+  }
+}
+
 // Source articles collapsible
 const sourcesExpanded = ref(true)
 
@@ -113,8 +158,18 @@ async function fetchTask() {
   try {
     const res = await api.get<TaskDetail>(`/tasks/${taskId}`)
     task.value = res.data
-    // Server data is authoritative now — drop the in-progress placeholder
-    pendingGen.value = null
+    // Rebuild the pending placeholder from server state when generation is in-progress
+    if (res.data.is_running && res.data.running_generation) {
+      const rg = res.data.running_generation
+      pendingGen.value = makePending({
+        prompt: rg.prompt,
+        based_on: rg.based_on,
+        sequence_num: rg.sequence_num,
+        parent_sequence_num: rg.parent_sequence_num,
+      })
+    } else {
+      pendingGen.value = null
+    }
     // Keep the selected base pointing at the current slot (ids change on replace)
     if (selectedBase.value) {
       selectedBase.value =
@@ -539,15 +594,49 @@ onUnmounted(() => {
                   <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary" />
                 </span>
                 <span class="text-sm font-medium text-primary">正在生成…</span>
+                <button
+                  v-if="streamingContent"
+                  type="button"
+                  class="ml-auto rounded-md border border-border px-2 py-0.5 text-xs text-text-secondary transition-colors hover:bg-slate-50"
+                  @click="copyAsPlainText"
+                >
+                  {{ copyTextSuccess ? '已复制' : '复制文本' }}
+                </button>
+                <button
+                  v-if="streamingContent"
+                  type="button"
+                  class="rounded-md border border-border px-2 py-0.5 text-xs text-text-secondary transition-colors hover:bg-slate-50"
+                  @click="copyAsMarkdown"
+                >
+                  {{ copyMdSuccess ? '已复制' : '复制 MD' }}
+                </button>
               </div>
               <MarkdownViewer :content="streamingContent || '等待内容…'" />
             </div>
 
             <!-- Latest content -->
             <div v-else-if="displayContent">
-              <h2 v-if="displayTitle" class="mb-4 text-xl font-bold text-text">
-                {{ displayTitle }}
-              </h2>
+              <div class="mb-4 flex items-start justify-between gap-3">
+                <h2 v-if="displayTitle" class="text-xl font-bold text-text">
+                  {{ displayTitle }}
+                </h2>
+                <div class="ml-auto flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    class="rounded-md border border-border px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-slate-50"
+                    @click="copyAsPlainText"
+                  >
+                    {{ copyTextSuccess ? '已复制' : '复制文本' }}
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-md border border-border px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-slate-50"
+                    @click="copyAsMarkdown"
+                  >
+                    {{ copyMdSuccess ? '已复制' : '复制 MD' }}
+                  </button>
+                </div>
+              </div>
               <MarkdownViewer :content="displayContent" />
             </div>
 

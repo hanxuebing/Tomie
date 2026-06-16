@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api, { getLLMConfig } from '@/api'
 import type { TaskDetail, GenerationItem, Article, LLMModel } from '@/types'
@@ -26,7 +26,6 @@ const sourcesExpanded = ref(true)
 // Generation input
 const genPrompt = ref('')
 const basedOn = ref<'source' | 'previous'>('source')
-const generating = ref(false)
 
 // Model selection
 const textModels = ref<LLMModel[]>([])
@@ -110,8 +109,7 @@ async function selectGeneration(gen: GenerationItem) {
 }
 
 async function doRegenerate(gen: GenerationItem) {
-  if (generating.value) return
-  generating.value = true
+  if (isStreaming.value) return
   streamingContent.value = ''
   isStreaming.value = true
 
@@ -130,13 +128,11 @@ async function doRegenerate(gen: GenerationItem) {
     closeSSE()
     window.alert('重新生成请求失败')
     isStreaming.value = false
-    generating.value = false
   }
 }
 
 async function doGenerate() {
-  if (generating.value || !genPrompt.value.trim()) return
-  generating.value = true
+  if (isStreaming.value || !genPrompt.value.trim()) return
   streamingContent.value = ''
   isStreaming.value = true
 
@@ -157,7 +153,6 @@ async function doGenerate() {
     closeSSE()
     window.alert('生成请求失败，请稍后重试')
     isStreaming.value = false
-    generating.value = false
   }
 }
 
@@ -178,14 +173,12 @@ function startSSE() {
   eventSource.addEventListener('done', () => {
     closeSSE()
     isStreaming.value = false
-    generating.value = false
     fetchTask()
   })
 
   eventSource.addEventListener('error', (e: MessageEvent) => {
     closeSSE()
     isStreaming.value = false
-    generating.value = false
     try {
       const data = JSON.parse(e.data)
       window.alert(`生成出错：${data.message || '未知错误'}`)
@@ -198,7 +191,6 @@ function startSSE() {
   eventSource.addEventListener('cancelled', () => {
     closeSSE()
     isStreaming.value = false
-    generating.value = false
     window.alert('生成已取消')
     fetchTask()
   })
@@ -206,7 +198,6 @@ function startSSE() {
   eventSource.onerror = () => {
     closeSSE()
     isStreaming.value = false
-    generating.value = false
   }
 }
 
@@ -274,13 +265,15 @@ onUnmounted(() => {
           </span>
         </div>
         <div v-if="isRunning" class="flex items-center gap-2">
-          <button
-            type="button"
-            class="rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-text transition-colors hover:bg-slate-50"
-            @click="finishTask"
-          >
-            ✓ 完成
-          </button>
+          <template v-if="!isStreaming">
+            <button
+              type="button"
+              class="rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-text transition-colors hover:bg-slate-50"
+              @click="finishTask"
+            >
+              ✓ 完成
+            </button>
+          </template>
           <button
             type="button"
             class="rounded-lg border border-red-200 bg-card px-3 py-1.5 text-sm font-medium text-danger transition-colors hover:bg-red-50"
@@ -332,7 +325,7 @@ onUnmounted(() => {
               <p class="mb-2 text-sm font-semibold text-text">生成历史</p>
               <GenerationHistory
                 :generations="task.generations"
-                :can-regenerate="task.status === 'running' && !generating"
+                :can-regenerate="task.status === 'running' && !isStreaming"
                 @view="viewGenerationArticle"
                 @select="selectGeneration"
                 @regenerate="doRegenerate"
@@ -425,11 +418,11 @@ onUnmounted(() => {
               />
               <button
                 type="button"
-                :disabled="generating || !genPrompt.trim()"
+                :disabled="isStreaming || !genPrompt.trim()"
                 class="shrink-0 self-end rounded-lg bg-primary px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-hover disabled:opacity-50"
                 @click="doGenerate"
               >
-                {{ generating ? '生成中…' : '生成' }}
+                {{ isStreaming ? '生成中…' : '生成' }}
               </button>
             </div>
           </div>

@@ -47,7 +47,12 @@ async function fetchTextModels() {
 }
 
 // SSE
-let eventSource: EventSource | null = null
+let sseAbort: AbortController | null = null
+let sseReconnectTimer: number | null = null
+let sseRetries = 0
+const SSE_MAX_RETRIES = 6
+const SSE_BASE_DELAY = 1000
+const SSE_MAX_DELAY = 15000
 
 const isRunning = computed(() => task.value?.status === 'running')
 
@@ -169,54 +174,155 @@ async function doGenerate() {
 
 function startSSE() {
   closeSSE()
-  const url = `/api/tasks/${taskId}/stream`
-  eventSource = new EventSource(url)
+  sseRetries = 0
+  connectSSE()
+}
 
-  eventSource.addEventListener('chunk', (e: MessageEvent) => {
+function connectSSE() {
+  const ctrl = new AbortController()
+  sseAbort = ctrl
+
+  const baseURL = api.defaults.baseURL || ''
+  const url = `${baseURL}/tasks/${taskId}/stream`
+  const headers: Record<string, string> = { Accept: 'text/event-stream' }
+  const axiosAuth = api.defaults.headers?.common?.['Authorization']
+  if (axiosAuth && typeof axiosAuth === 'string') headers['Authorization'] = axiosAuth
+
+  ;(async () => {
     try {
-      const data = JSON.parse(e.data)
-      streamingContent.value += data.content ?? ''
-    } catch {
-      streamingContent.value += e.data
-    }
-  })
+      const res = await fetch(url, { headers, signal: ctrl.signal })
+      if (!res.ok || !res.body) {
+        scheduleReconnect(ctrl)
+        return
+      }
 
-  eventSource.addEventListener('done', () => {
-    closeSSE()
+      // 成功建立连接，重置退避计数
+      sseRetries = 0
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+
+        let boundary: number
+        while ((boundary = buf.indexOf('\n\n')) !== -1) {
+          const frame = buf.slice(0, boundary)
+          buf = buf.slice(boundary + 2)
+
+          let event = 'message'
+          let data = ''
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('event:')) event = line.slice(6).trim()
+            else if (line.startsWith('data:')) data = line.slice(5).trim()
+          }
+
+          handleSSEEvent(event, data)
+        }
+      }
+
+      // 流结束但未收到终止事件（服务端关闭连接 / 网络中断）→ 尝试重连
+      scheduleReconnect(ctrl)
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === 'AbortError') return
+      scheduleReconnect(ctrl)
+    }
+  })()
+}
+
+// 非正常断开时按指数退避重连；重连前先核对 is_running，生成已结束则收尾
+function scheduleReconnect(ctrl: AbortController) {
+  // 已被 closeSSE 中止或被新连接取代，则不再重连
+  if (sseAbort !== ctrl) return
+  sseAbort = null
+  if (!isStreaming.value) return
+
+  if (sseRetries >= SSE_MAX_RETRIES) {
     isStreaming.value = false
     fetchTask()
-  })
+    return
+  }
 
-  eventSource.addEventListener('error', (e: MessageEvent) => {
-    closeSSE()
-    isStreaming.value = false
+  const delay = Math.min(SSE_BASE_DELAY * 2 ** sseRetries, SSE_MAX_DELAY)
+  sseRetries++
+  sseReconnectTimer = window.setTimeout(async () => {
+    sseReconnectTimer = null
+    if (!isStreaming.value) return
     try {
-      const data = JSON.parse(e.data)
-      window.alert(`生成出错：${data.message || '未知错误'}`)
+      const res = await api.get<TaskDetail>(`/tasks/${taskId}`)
+      if (!res.data.is_running) {
+        isStreaming.value = false
+        await fetchTask()
+        return
+      }
     } catch {
-      window.alert(`生成出错：${e.data || '未知错误'}`)
+      // 核对失败（可能网络仍未恢复）→ 仍尝试重连
     }
-    fetchTask()
-  })
+    if (isStreaming.value) connectSSE()
+  }, delay)
+}
 
-  eventSource.addEventListener('cancelled', () => {
-    closeSSE()
-    isStreaming.value = false
-    window.alert('生成已取消')
-    fetchTask()
-  })
-
-  eventSource.onerror = () => {
-    closeSSE()
-    isStreaming.value = false
+function handleSSEEvent(event: string, data: string) {
+  switch (event) {
+    case 'connected':
+      if (isStreaming.value && streamingContent.value === '') {
+        api.get<TaskDetail>(`/tasks/${taskId}`)
+          .then(res => {
+            if (!res.data.is_running) {
+              closeSSE()
+              isStreaming.value = false
+              fetchTask()
+            }
+          })
+          .catch(() => {})
+      }
+      break
+    case 'chunk':
+      try {
+        const parsed = JSON.parse(data)
+        streamingContent.value += parsed.content ?? ''
+      } catch {
+        streamingContent.value += data
+      }
+      break
+    case 'done':
+      closeSSE()
+      isStreaming.value = false
+      fetchTask()
+      break
+    case 'error':
+      closeSSE()
+      isStreaming.value = false
+      try {
+        const parsed = JSON.parse(data)
+        window.alert(`生成出错：${parsed.message || '未知错误'}`)
+      } catch {
+        window.alert(`生成出错：${data || '未知错误'}`)
+      }
+      fetchTask()
+      break
+    case 'cancelled':
+      closeSSE()
+      isStreaming.value = false
+      window.alert('生成已取消')
+      fetchTask()
+      break
   }
 }
 
 function closeSSE() {
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
+  if (sseReconnectTimer !== null) {
+    clearTimeout(sseReconnectTimer)
+    sseReconnectTimer = null
   }
+  if (sseAbort) {
+    sseAbort.abort()
+    sseAbort = null
+  }
+  sseRetries = 0
 }
 
 async function finishTask() {
@@ -239,9 +345,15 @@ async function cancelTask() {
   }
 }
 
-onMounted(() => {
-  fetchTask()
+onMounted(async () => {
   fetchTextModels()
+  await fetchTask()
+
+  if (task.value?.is_running && !isStreaming.value) {
+    streamingContent.value = ''
+    isStreaming.value = true
+    startSSE()
+  }
 })
 
 onUnmounted(() => {

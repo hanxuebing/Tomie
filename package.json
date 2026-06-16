@@ -1,0 +1,14 @@
+{
+  "name": "tomie",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": ["shared", "agent", "server", "web"],
+  "scripts": {
+    "dev:server": "bun run --watch server/index.ts",
+    "dev:web": "cd web && bun run dev",
+    "dev": "concurrently \"bun run dev:server\" \"bun run dev:web\""
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3"
+  }
+}

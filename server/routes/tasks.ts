@@ -74,10 +74,12 @@ router.get('/:id', (req, res) => {
   `).all(task.id);
 
   const generations = db.query(`
-    SELECT g.*, a.title as article_title, a.file_path
+    SELECT g.*, a.title as article_title, a.file_path,
+           pg.sequence_num as parent_sequence_num
     FROM generations g
     JOIN articles a ON a.id = g.article_id
-    WHERE g.task_id = ?
+    LEFT JOIN generations pg ON pg.id = g.parent_generation_id
+    WHERE g.task_id = ? AND g.replaced_by IS NULL
     ORDER BY g.sequence_num ASC
   `).all(task.id);
 
@@ -173,7 +175,7 @@ router.post('/:id/generate', async (req: Request, res: Response) => {
     return;
   }
 
-  const { prompt, based_on, parent_generation_id, model_id } = req.body as GenerateRequest;
+  const { prompt, based_on, parent_generation_id, model_id, replace_generation_id } = req.body as GenerateRequest;
   if (!prompt) {
     res.status(400).json({ error: '请输入提示词' });
     return;
@@ -211,11 +213,23 @@ router.post('/:id/generate', async (req: Request, res: Response) => {
       }
     }
 
-    // Get sequence number
-    const lastGen = db.query(
-      'SELECT MAX(sequence_num) as max_seq FROM generations WHERE task_id = ?'
-    ).get(task.id) as { max_seq: number | null } | null;
-    const sequenceNum = (lastGen?.max_seq || 0) + 1;
+    // Determine sequence number (replace reuses the old one; new appends)
+    let sequenceNum: number;
+    if (replace_generation_id) {
+      const replacedGen = db.query(
+        'SELECT sequence_num FROM generations WHERE id = ? AND task_id = ?'
+      ).get(replace_generation_id, task.id) as { sequence_num: number } | null;
+      if (!replacedGen) {
+        sendSSE(task.id, 'error', { message: '要替换的生成记录不存在' });
+        return;
+      }
+      sequenceNum = replacedGen.sequence_num;
+    } else {
+      const lastGen = db.query(
+        'SELECT MAX(sequence_num) as max_seq FROM generations WHERE task_id = ?'
+      ).get(task.id) as { max_seq: number | null } | null;
+      sequenceNum = (lastGen?.max_seq || 0) + 1;
+    }
 
     sendSSE(task.id, 'start', { sequence_num: sequenceNum });
 
@@ -254,6 +268,11 @@ router.post('/:id/generate', async (req: Request, res: Response) => {
       'INSERT INTO generations (id, task_id, article_id, prompt, based_on, parent_generation_id, sequence_num, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [genId, task.id, articleId, prompt, based_on || 'source', parent_generation_id || null, sequenceNum, now]
     );
+
+    // Mark old generation as replaced
+    if (replace_generation_id) {
+      db.run('UPDATE generations SET replaced_by = ? WHERE id = ?', [genId, replace_generation_id]);
+    }
 
     db.run('UPDATE tasks SET updated_at = ? WHERE id = ?', [now, task.id]);
 

@@ -25,7 +25,11 @@ const sourcesExpanded = ref(true)
 
 // Generation input
 const genPrompt = ref('')
-const basedOn = ref<'source' | 'previous'>('source')
+const selectedBase = ref<GenerationItem | null>(null)
+
+const baseLabel = computed(() =>
+  selectedBase.value ? `#${selectedBase.value.sequence_num}` : '源文章'
+)
 
 // Model selection
 const textModels = ref<LLMModel[]>([])
@@ -45,14 +49,7 @@ async function fetchTextModels() {
 // SSE
 let eventSource: EventSource | null = null
 
-const latestGeneration = computed<GenerationItem | null>(() => {
-  if (!task.value || !task.value.generations.length) return null
-  return task.value.generations[task.value.generations.length - 1]
-})
-
-const isRunning = computed(() => task.value?.is_running ?? false)
-
-const hasGenerations = computed(() => (task.value?.generations.length ?? 0) > 0)
+const isRunning = computed(() => task.value?.status === 'running')
 
 const isGenerating = computed(() => isStreaming.value || (task.value?.is_running ?? false))
 const statusLabel = computed(() => {
@@ -72,6 +69,11 @@ async function fetchTask() {
   try {
     const res = await api.get<TaskDetail>(`/tasks/${taskId}`)
     task.value = res.data
+    // Keep the selected base pointing at the current slot (ids change on replace)
+    if (selectedBase.value) {
+      selectedBase.value =
+        res.data.generations.find(g => g.sequence_num === selectedBase.value!.sequence_num) ?? null
+    }
     // Load latest generation article content
     if (!isStreaming.value && res.data.generations.length) {
       const latest = res.data.generations[res.data.generations.length - 1]
@@ -108,6 +110,14 @@ async function selectGeneration(gen: GenerationItem) {
   await loadArticleContent(gen.article_id)
 }
 
+function setBase(gen: GenerationItem) {
+  selectedBase.value = gen
+}
+
+function resetBase() {
+  selectedBase.value = null
+}
+
 async function doRegenerate(gen: GenerationItem) {
   if (isStreaming.value) return
   streamingContent.value = ''
@@ -117,6 +127,7 @@ async function doRegenerate(gen: GenerationItem) {
     const payload: Record<string, unknown> = {
       prompt: gen.prompt,
       based_on: gen.based_on,
+      replace_generation_id: gen.id,
     }
     if (gen.based_on === 'previous' && gen.parent_generation_id) {
       payload.parent_generation_id = gen.parent_generation_id
@@ -139,10 +150,10 @@ async function doGenerate() {
   try {
     const payload: Record<string, unknown> = {
       prompt: genPrompt.value.trim(),
-      based_on: basedOn.value,
+      based_on: selectedBase.value ? 'previous' : 'source',
     }
-    if (basedOn.value === 'previous' && latestGeneration.value) {
-      payload.parent_generation_id = latestGeneration.value.id
+    if (selectedBase.value) {
+      payload.parent_generation_id = selectedBase.value.id
     }
     if (selectedModelId.value) payload.model_id = selectedModelId.value
     // Open the SSE stream before triggering generation so no early chunks are missed.
@@ -326,8 +337,10 @@ onUnmounted(() => {
               <GenerationHistory
                 :generations="task.generations"
                 :can-regenerate="task.status === 'running' && !isStreaming"
+                :base-id="selectedBase?.id ?? null"
                 @view="viewGenerationArticle"
                 @select="selectGeneration"
+                @base="setBase"
                 @regenerate="doRegenerate"
               />
               <p v-if="!task.generations.length" class="py-2 text-center text-xs text-text-muted">
@@ -375,29 +388,18 @@ onUnmounted(() => {
 
           <!-- Bottom bar — generation input (running only) -->
           <div v-if="isRunning" class="border-t border-border bg-card p-4">
-            <div class="mb-3 flex items-center gap-4">
-              <label class="flex items-center gap-1.5 text-sm text-text-secondary">
-                <input
-                  v-model="basedOn"
-                  type="radio"
-                  value="source"
-                  class="accent-primary"
-                />
-                基于原始文章
-              </label>
-              <label
-                class="flex items-center gap-1.5 text-sm"
-                :class="hasGenerations ? 'text-text-secondary' : 'text-text-muted'"
+            <div class="mb-3 flex items-center gap-3">
+              <span class="text-sm text-text-secondary">
+                当前基于：<span class="font-medium text-text">{{ baseLabel }}</span>
+              </span>
+              <button
+                v-if="selectedBase"
+                type="button"
+                class="rounded-md border border-border px-2 py-0.5 text-xs text-text-secondary transition-colors hover:bg-slate-50"
+                @click="resetBase"
               >
-                <input
-                  v-model="basedOn"
-                  type="radio"
-                  value="previous"
-                  :disabled="!hasGenerations"
-                  class="accent-primary"
-                />
-                基于上次生成
-              </label>
+                重置为源文章
+              </button>
               <select
                 v-if="textModels.length"
                 v-model="selectedModelId"

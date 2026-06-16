@@ -102,6 +102,12 @@ export function migrate() {
     db.exec('ALTER TABLE tasks DROP COLUMN mode');
   }
 
+  // Backfill replaced_by for in-place regeneration tracking
+  const genCols = db.query('PRAGMA table_info(generations)').all() as { name: string }[];
+  if (!genCols.some((c) => c.name === 'replaced_by')) {
+    db.exec('ALTER TABLE generations ADD COLUMN replaced_by TEXT');
+  }
+
   // Insert default models if table is empty
   const modelCount = db.query('SELECT COUNT(*) as cnt FROM llm_models').get() as { cnt: number };
   if (modelCount.cnt === 0) {

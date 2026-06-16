@@ -5,19 +5,22 @@ withDefaults(
   defineProps<{
     generations: GenerationItem[]
     canRegenerate?: boolean
+    baseId?: string | null
   }>(),
-  { canRegenerate: false }
+  { canRegenerate: false, baseId: null }
 )
 
 const emit = defineEmits<{
   (e: 'view', articleId: string): void
   (e: 'select', generation: GenerationItem): void
+  (e: 'base', generation: GenerationItem): void
   (e: 'regenerate', generation: GenerationItem): void
 }>()
 
-const basedOnLabel: Record<GenerationItem['based_on'], string> = {
-  source: '基于原文',
-  previous: '基于上一次生成',
+function basedOnText(gen: GenerationItem): string {
+  if (gen.based_on === 'source') return '基于源文章'
+  if (gen.parent_sequence_num != null) return `基于 #${gen.parent_sequence_num}`
+  return '基于历史'
 }
 
 function formatDate(s: string): string {
@@ -64,15 +67,20 @@ function truncate(text: string, max = 60): string {
 
       <!-- Content card -->
       <div
-        class="rounded-lg border p-3"
+        class="rounded-lg border p-3 transition-colors"
         :class="
-          idx === generations.length - 1
-            ? 'border-primary/30 bg-primary-light/40'
-            : 'border-border bg-card'
+          gen.id === baseId
+            ? 'border-primary bg-primary-light/60 ring-1 ring-primary'
+            : idx === generations.length - 1
+              ? 'border-primary/30 bg-primary-light/40'
+              : 'border-border bg-card'
         "
       >
-        <!-- Title row -->
-        <div class="flex items-center justify-between gap-2">
+        <!-- Title row (click to preview) -->
+        <div
+          class="flex cursor-pointer items-center justify-between gap-2"
+          @click="emit('select', gen)"
+        >
           <span class="text-sm font-semibold text-text">
             {{ gen.article_title }}
           </span>
@@ -81,15 +89,25 @@ function truncate(text: string, max = 60): string {
           </span>
         </div>
 
-        <!-- Prompt -->
-        <p class="mt-1 text-xs text-text-secondary" :title="gen.prompt">
+        <!-- Prompt (click to preview) -->
+        <p
+          class="mt-1 cursor-pointer text-xs text-text-secondary"
+          :title="gen.prompt"
+          @click="emit('select', gen)"
+        >
           {{ truncate(gen.prompt) }}
         </p>
 
         <!-- Badges + Actions -->
         <div class="mt-2 flex flex-wrap items-center gap-2">
           <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-text-secondary">
-            {{ basedOnLabel[gen.based_on] }}
+            {{ basedOnText(gen) }}
+          </span>
+          <span
+            v-if="gen.id === baseId"
+            class="rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-white"
+          >
+            当前基础
           </span>
 
           <!-- Actions -->
@@ -118,7 +136,7 @@ function truncate(text: string, max = 60): string {
             <button
               type="button"
               class="rounded-md border border-border px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-slate-50 hover:text-text"
-              @click.stop="emit('select', gen)"
+              @click.stop="emit('base', gen)"
             >
               基于此修改
             </button>

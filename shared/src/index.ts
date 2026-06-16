@@ -34,6 +34,7 @@ export interface Generation {
   parent_generation_id: string | null
   sequence_num: number
   created_at: string
+  replaced_by?: string | null
 }
 
 export interface LLMModel {
@@ -49,5 +50,6 @@ export interface GenerateRequest {
   prompt: string
   based_on: 'source' | 'previous'
   parent_generation_id?: string
+  replace_generation_id?: string
   model_id?: string
 }

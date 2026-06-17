@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk'
+import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { VisionEngine, VisionInput, LLMSettings } from '../types'
 import { pickModel } from '../types'
 
@@ -7,9 +7,9 @@ export class ClaudeVisionEngine implements VisionEngine {
 
   private buildEnv(settings: LLMSettings): Record<string, string> {
     const env: Record<string, string> = {}
-    for (const [k, v] of Object.entries(process.env)) {
-      if (typeof v === 'string') env[k] = v
-    }
+    // for (const [k, v] of Object.entries(process.env)) {
+    //   if (typeof v === 'string') env[k] = v
+    // }
     env.ANTHROPIC_AUTH_TOKEN = settings.auth.authToken
     if (settings.auth.baseUrl) env.ANTHROPIC_BASE_URL = settings.auth.baseUrl
     return env
@@ -42,13 +42,36 @@ ${input.hint ? `补充说明：${input.hint}` : ''}`
       return c
     })() : undefined
 
-    // Build custom messages with image content block
-    // The Claude Agent SDK query() takes a prompt string; for images we need
-    // to pass a structured content block. We'll encode the image inline.
-    const promptWithImage = `<image>data:${input.mimeType};base64,${input.imageBase64}</image>\n\n${imagePrompt}`
+    // Images must be passed via streaming-input mode as a structured image
+    // content block — a base64 string embedded in a text prompt is treated as
+    // plain text, not as vision input.
+    async function* buildMessages(): AsyncGenerator<SDKUserMessage> {
+      yield {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: input.mimeType as
+                  | 'image/jpeg'
+                  | 'image/png'
+                  | 'image/gif'
+                  | 'image/webp',
+                data: input.imageBase64,
+              },
+            },
+            { type: 'text', text: imagePrompt },
+          ],
+        },
+        parent_tool_use_id: null,
+      }
+    }
 
     const response = query({
-      prompt: promptWithImage,
+      prompt: buildMessages(),
       options: {
         model: entry.model,
         systemPrompt: '你是一个专业的 OCR 文字转录助手。你的任务是将图片中的文字原封不动地转录出来，不做任何改写或格式化。',

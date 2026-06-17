@@ -107,6 +107,7 @@ function makePending(opts: {
     sequence_num: opts.sequence_num,
     created_at: new Date().toISOString(),
     replaced_by: null,
+    viewed_at: null,
     article_title: '生成中…',
     file_path: '',
     file_found: false,
@@ -179,6 +180,7 @@ async function fetchTask() {
     if (!isStreaming.value && res.data.generations.length) {
       const latest = res.data.generations[res.data.generations.length - 1]
       await loadArticleContent(latest.article_id)
+      markGenerationRead(latest)
     }
   } catch {
     error.value = '加载任务详情失败'
@@ -211,6 +213,13 @@ async function selectGeneration(gen: GenerationItem) {
   selectedGenId.value = gen.id
   selectedBase.value = gen
   await loadArticleContent(gen.article_id)
+  markGenerationRead(gen)
+}
+
+function markGenerationRead(gen: GenerationItem) {
+  if (gen.id === PENDING_ID || gen.viewed_at) return
+  gen.viewed_at = new Date().toISOString()
+  api.patch(`/tasks/${taskId}/generations/${gen.id}/read`).catch(() => {})
 }
 
 function resetBase() {

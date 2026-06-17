@@ -57,7 +57,7 @@ router.get('/', (req, res) => {
   let sql = `SELECT t.*,
     (SELECT COUNT(*) FROM task_sources WHERE task_id = t.id) as source_count,
     (SELECT COUNT(*) FROM generations WHERE task_id = t.id) as generation_count,
-    (SELECT MAX(created_at) FROM generations WHERE task_id = t.id) as last_generation_at
+    (SELECT COUNT(*) FROM generations WHERE task_id = t.id AND viewed_at IS NULL AND replaced_by IS NULL) as unread_count
     FROM tasks t`;
 
   if (status === 'running') {
@@ -69,11 +69,13 @@ router.get('/', (req, res) => {
 
   const rows = db.query(sql).all() as any[];
   const tasks = rows.map((t) => {
-    const { last_generation_at, ...rest } = t;
-    const has_unread =
-      !!last_generation_at &&
-      (!t.last_viewed_at || last_generation_at > t.last_viewed_at);
-    return { ...rest, is_running: runningTasks.has(t.id), has_unread };
+    const { unread_count, ...rest } = t;
+    return {
+      ...rest,
+      is_running: runningTasks.has(t.id),
+      has_unread: unread_count > 0,
+      unread_count,
+    };
   });
   res.json(tasks);
 });
@@ -101,10 +103,6 @@ router.get('/:id', (req, res) => {
     res.status(404).json({ error: '任务不存在' });
     return;
   }
-
-  // Mark as viewed
-  const now = new Date().toISOString();
-  db.run('UPDATE tasks SET last_viewed_at = ? WHERE id = ?', [now, task.id]);
 
   const sources = db.query(`
     SELECT ts.*, a.title, a.file_path, a.source as article_source
@@ -155,6 +153,22 @@ router.get('/:id', (req, res) => {
       replace_generation_id: running.replace_generation_id,
     } : null,
   });
+});
+
+// Mark a single generation as read
+router.patch('/:id/generations/:genId/read', (req, res) => {
+  const gen = db.query('SELECT id FROM generations WHERE id = ? AND task_id = ?')
+    .get(req.params.genId, req.params.id) as { id: string } | null;
+  if (!gen) {
+    res.status(404).json({ error: '生成记录不存在' });
+    return;
+  }
+  db.run(
+    'UPDATE generations SET viewed_at = ? WHERE id = ? AND viewed_at IS NULL',
+    [new Date().toISOString(), gen.id]
+  );
+  broadcastTaskEvent('task_updated', { id: req.params.id });
+  res.json({ success: true });
 });
 
 // Create task

@@ -118,6 +118,13 @@ function truncate(text: string, max = 60): string {
             {{ basedOnText(gen) }}
           </span>
 
+          <span
+            v-if="!gen.pending && !gen.viewed_at"
+            class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-600"
+          >
+            未读
+          </span>
+
           <!-- Actions (hidden for pending) -->
           <div v-if="!gen.pending" class="ml-auto flex items-center gap-2">
             <template v-if="gen.file_found">

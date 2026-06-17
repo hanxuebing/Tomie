@@ -35,6 +35,7 @@ export interface Generation {
   sequence_num: number
   created_at: string
   replaced_by?: string | null
+  viewed_at?: string | null
 }
 
 export interface LLMModel {

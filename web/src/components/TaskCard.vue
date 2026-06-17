@@ -109,7 +109,7 @@ function onClose() {
         v-if="task.has_unread"
         class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-600"
       >
-        未读
+        未读{{ task.unread_count ? ` (${task.unread_count})` : '' }}
       </span>
     </div>
 

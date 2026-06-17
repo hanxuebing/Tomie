@@ -17,6 +17,7 @@ export interface Task extends BaseTask {
   generation_count?: number
   is_running?: boolean
   has_unread?: boolean
+  unread_count?: number
 }
 
 export interface TaskDetail extends Task {

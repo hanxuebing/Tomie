@@ -43,6 +43,7 @@ export function migrate() {
       parent_generation_id TEXT,
       sequence_num INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      viewed_at TEXT,
       FOREIGN KEY (task_id) REFERENCES tasks(id),
       FOREIGN KEY (article_id) REFERENCES articles(id)
     );
@@ -106,6 +107,13 @@ export function migrate() {
   const genCols = db.query('PRAGMA table_info(generations)').all() as { name: string }[];
   if (!genCols.some((c) => c.name === 'replaced_by')) {
     db.exec('ALTER TABLE generations ADD COLUMN replaced_by TEXT');
+  }
+
+  // Backfill viewed_at for per-generation unread tracking
+  if (!genCols.some((c) => c.name === 'viewed_at')) {
+    db.exec('ALTER TABLE generations ADD COLUMN viewed_at TEXT');
+    // 历史记录标为已读，避免升级后全部突然变成未读
+    db.exec("UPDATE generations SET viewed_at = datetime('now') WHERE viewed_at IS NULL");
   }
 
   // Insert default models if table is empty

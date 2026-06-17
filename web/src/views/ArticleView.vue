@@ -5,6 +5,7 @@ import api from '@/api'
 import type { Article } from '@/types'
 import MarkdownViewer from '@/components/MarkdownViewer.vue'
 import MarkdownEditor from '@/components/MarkdownEditor.vue'
+import { useCopyContent } from '@/composables/useCopyContent'
 
 const route = useRoute()
 const router = useRouter()
@@ -93,6 +94,10 @@ function selectAsSource() {
 }
 
 onMounted(fetchArticle)
+
+const { copyTextSuccess, copyMdSuccess, copyAsPlainText, copyAsMarkdown } = useCopyContent(
+  () => article.value?.content ?? ''
+)
 </script>
 
 <template>
@@ -202,6 +207,22 @@ onMounted(fetchArticle)
           >
             {{ sourceConfig[article.source].label }}
           </span>
+          <div class="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              class="rounded-md border border-border px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-slate-50"
+              @click="copyAsPlainText"
+            >
+              {{ copyTextSuccess ? '已复制' : '复制文本' }}
+            </button>
+            <button
+              type="button"
+              class="rounded-md border border-border px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-slate-50"
+              @click="copyAsMarkdown"
+            >
+              {{ copyMdSuccess ? '已复制' : '复制 MD' }}
+            </button>
+          </div>
         </div>
         <div class="mt-6 rounded-xl border border-border bg-card p-6">
           <MarkdownViewer :content="article.content ?? ''" />

@@ -18,9 +18,9 @@ export class ClaudeAgentEngine implements AgentEngine {
 
   private buildEnv(settings: LLMSettings): Record<string, string> {
     const env: Record<string, string> = {}
-    for (const [k, v] of Object.entries(process.env)) {
-      if (typeof v === 'string') env[k] = v
-    }
+    // for (const [k, v] of Object.entries(process.env)) {
+    //   if (typeof v === 'string') env[k] = v
+    // }
     env.ANTHROPIC_AUTH_TOKEN = settings.auth.authToken
     if (settings.auth.baseUrl) env.ANTHROPIC_BASE_URL = settings.auth.baseUrl
     return env

@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import api from '@/api'
 import type { Task } from '@/types'
 import TaskCard from '@/components/TaskCard.vue'
+import { useTasksSSE } from '@/composables/useTasksSSE'
 
 type Tab = 'running' | 'finished'
 
@@ -65,6 +66,23 @@ async function closeTask(task: Task) {
 }
 
 onMounted(fetchTasks)
+
+let refetchTimer: number | null = null
+function debouncedFetchTasks() {
+  if (refetchTimer !== null) clearTimeout(refetchTimer)
+  refetchTimer = window.setTimeout(() => {
+    refetchTimer = null
+    fetchTasks()
+  }, 300)
+}
+
+useTasksSSE((event) => {
+  if (event.type === 'task_deleted') {
+    tasks.value = tasks.value.filter((t) => t.id !== event.id)
+  } else {
+    debouncedFetchTasks()
+  }
+})
 </script>
 
 <template>

@@ -37,6 +37,20 @@ function sendSSE(taskId: string, event: string, data: any) {
   }
 }
 
+// Global SSE for task-list-level status changes
+const globalSSEConnections = new Set<Response>();
+
+function broadcastTaskEvent(event: string, data: { id: string }) {
+  const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of globalSSEConnections) {
+    try {
+      res.write(frame);
+    } catch {
+      globalSSEConnections.delete(res);
+    }
+  }
+}
+
 // List tasks
 router.get('/', (req, res) => {
   const { status } = req.query;
@@ -62,6 +76,22 @@ router.get('/', (req, res) => {
     return { ...rest, is_running: runningTasks.has(t.id), has_unread };
   });
   res.json(tasks);
+});
+
+// Global SSE stream for task list updates
+router.get('/stream', (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  globalSSEConnections.add(res);
+  res.write(`event: connected\ndata: {}\n\n`);
+
+  req.on('close', () => {
+    globalSSEConnections.delete(res);
+  });
 });
 
 // Get task detail
@@ -176,6 +206,7 @@ router.post('/', async (req: Request, res: Response) => {
 
   const task = db.query('SELECT * FROM tasks WHERE id = ?').get(taskId);
   res.status(201).json(task);
+  broadcastTaskEvent('task_created', { id: taskId });
 });
 
 // Trigger generation (initial or iterative)
@@ -239,6 +270,7 @@ router.post('/:id/generate', async (req: Request, res: Response) => {
 
   // Respond immediately
   res.json({ message: '生成已开始' });
+  broadcastTaskEvent('task_updated', { id: task.id });
 
   // Run in background
   try {
@@ -322,11 +354,14 @@ router.post('/:id/generate', async (req: Request, res: Response) => {
       article_title: articleTitle,
       sequence_num: sequenceNum,
     });
+    broadcastTaskEvent('task_updated', { id: task.id });
   } catch (err: any) {
     if (err.name === 'AbortError') {
       sendSSE(task.id, 'cancelled', { message: '生成已取消' });
+      broadcastTaskEvent('task_updated', { id: task.id });
     } else {
       sendSSE(task.id, 'error', { message: err.message || '生成失败' });
+      broadcastTaskEvent('task_updated', { id: task.id });
     }
   } finally {
     runningTasks.delete(task.id);
@@ -381,6 +416,7 @@ router.put('/:id/complete', (req, res) => {
   if (ctrl) ctrl.controller.abort();
   runningTasks.delete(task.id);
 
+  broadcastTaskEvent('task_updated', { id: task.id });
   res.json({ success: true });
 });
 
@@ -400,6 +436,7 @@ router.put('/:id/cancel', (req, res) => {
   if (ctrl) ctrl.controller.abort();
   runningTasks.delete(task.id);
 
+  broadcastTaskEvent('task_updated', { id: task.id });
   res.json({ success: true });
 });
 
@@ -421,6 +458,7 @@ router.delete('/:id', (req, res) => {
   db.run('DELETE FROM task_sources WHERE task_id = ?', [task.id]);
   db.run('DELETE FROM tasks WHERE id = ?', [task.id]);
 
+  broadcastTaskEvent('task_deleted', { id: task.id });
   res.json({ success: true });
 });
 

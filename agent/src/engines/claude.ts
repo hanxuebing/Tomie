@@ -43,12 +43,12 @@ export class ClaudeAgentEngine implements AgentEngine {
     if (!entry) throw new Error('未配置文本模型，请在设置中添加 text 模型')
 
     const system = buildSystemPrompt(input.sources.length > 1)
-    const user = buildUserPrompt(input)
+    const userPrompt = buildUserPrompt(input)
 
     yield { type: 'step', step: '正在生成...' }
 
     const response = query({
-      prompt: user,
+      prompt: userPrompt,
       options: {
         model: entry.model,
         systemPrompt: system,

@@ -155,7 +155,7 @@ const statusCls = computed(() => {
   return m[task.value?.status ?? ''] ?? ''
 })
 
-async function fetchTask() {
+async function fetchTask(showLatest = false) {
   try {
     const res = await api.get<TaskDetail>(`/tasks/${taskId}`)
     task.value = res.data
@@ -176,8 +176,8 @@ async function fetchTask() {
       selectedBase.value =
         res.data.generations.find(g => g.sequence_num === selectedBase.value!.sequence_num) ?? null
     }
-    // Load latest generation article content
-    if (!isStreaming.value && res.data.generations.length) {
+    // 仅在生成刚完成时自动展示最新结果；进入页面时右侧默认留空，由用户点击历史记录加载
+    if (showLatest && !isStreaming.value && res.data.generations.length) {
       const latest = res.data.generations[res.data.generations.length - 1]
       await loadArticleContent(latest.article_id)
       markGenerationRead(latest)
@@ -421,7 +421,7 @@ function handleSSEEvent(event: string, data: string) {
     case 'done':
       closeSSE()
       isStreaming.value = false
-      fetchTask()
+      fetchTask(true)
       break
     case 'error':
       closeSSE()

@@ -12,7 +12,8 @@ export function migrate() {
       source TEXT NOT NULL CHECK(source IN ('upload', 'generated')),
       task_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS tasks (
@@ -107,6 +108,12 @@ export function migrate() {
   const genCols = db.query('PRAGMA table_info(generations)').all() as { name: string }[];
   if (!genCols.some((c) => c.name === 'replaced_by')) {
     db.exec('ALTER TABLE generations ADD COLUMN replaced_by TEXT');
+  }
+
+  // Backfill deleted_at for article soft-delete
+  const articleCols = db.query('PRAGMA table_info(articles)').all() as { name: string }[];
+  if (!articleCols.some((c) => c.name === 'deleted_at')) {
+    db.exec('ALTER TABLE articles ADD COLUMN deleted_at TEXT');
   }
 
   // Backfill viewed_at for per-generation unread tracking

@@ -355,9 +355,13 @@ router.post('/:id/generate', async (req: Request, res: Response) => {
       [genId, task.id, articleId, prompt, based_on || 'source', parent_generation_id || null, sequenceNum, now]
     );
 
-    // Mark old generation as replaced
+    // Mark old generation as replaced and soft-delete old article
     if (replace_generation_id) {
       db.run('UPDATE generations SET replaced_by = ? WHERE id = ?', [genId, replace_generation_id]);
+      db.run(
+        'UPDATE articles SET deleted_at = ? WHERE id = (SELECT article_id FROM generations WHERE id = ?)',
+        [now, replace_generation_id]
+      );
     }
 
     db.run('UPDATE tasks SET updated_at = ? WHERE id = ?', [now, task.id]);

@@ -18,7 +18,7 @@ if (!fs.existsSync(ARTICLES_DIR)) {
 router.get('/', (req, res) => {
   const { source, search, standalone } = req.query;
   let sql = 'SELECT id, title, file_path, source, task_id, created_at, updated_at FROM articles';
-  const conditions: string[] = [];
+  const conditions: string[] = ['deleted_at IS NULL'];
   const params: any[] = [];
 
   if (source && (source === 'upload' || source === 'generated')) {
@@ -55,7 +55,7 @@ router.get('/grouped', (req, res) => {
     ? db.query(
         `SELECT id, title, file_path, source, task_id, created_at, updated_at
          FROM articles
-         WHERE task_id IS NULL${search ? ' AND title LIKE ?' : ''}
+         WHERE task_id IS NULL AND deleted_at IS NULL${search ? ' AND title LIKE ?' : ''}
          ORDER BY created_at DESC`
       ).all(...(search ? [like] : []))
     : [];
@@ -66,7 +66,7 @@ router.get('/grouped', (req, res) => {
      FROM tasks t
      WHERE EXISTS (
        SELECT 1 FROM articles a
-       WHERE a.task_id = t.id${search ? ' AND a.title LIKE ?' : ''}
+       WHERE a.task_id = t.id AND a.deleted_at IS NULL${search ? ' AND a.title LIKE ?' : ''}
      )
      ORDER BY t.created_at DESC`
   ).all(...(search ? [like] : [])) as { id: string; title: string; status: string; created_at: string }[];
@@ -80,7 +80,7 @@ router.get('/grouped', (req, res) => {
               a.created_at, a.updated_at, g.sequence_num
        FROM articles a
        LEFT JOIN generations g ON g.article_id = a.id
-       WHERE a.task_id = ?${search ? ' AND a.title LIKE ?' : ''}
+       WHERE a.task_id = ? AND a.deleted_at IS NULL${search ? ' AND a.title LIKE ?' : ''}
        ORDER BY CASE WHEN a.source = 'upload' THEN 0 ELSE 1 END,
                 g.sequence_num ASC`
     ).all(...(search ? [t.id, like] : [t.id]));
@@ -130,7 +130,7 @@ router.post('/ocr', async (req, res) => {
 // Get single article with content
 router.get('/:id', (req, res) => {
   const article = db.query('SELECT * FROM articles WHERE id = ?').get(req.params.id) as Article | null;
-  if (!article) {
+  if (!article || article.deleted_at) {
     res.status(404).json({ error: '文章不存在' });
     return;
   }

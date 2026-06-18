@@ -5,6 +5,7 @@ import api, { getLLMConfig } from '@/api'
 import type { TaskDetail, GenerationItem, Article, LLMModel } from '@/types'
 import MarkdownViewer from '@/components/MarkdownViewer.vue'
 import GenerationHistory from '@/components/GenerationHistory.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { useCopyContent } from '@/composables/useCopyContent'
 
 const route = useRoute()
@@ -33,6 +34,28 @@ const sourcesExpanded = ref(true)
 const genPrompt = ref('')
 const selectedBase = ref<GenerationItem | null>(null)
 const selectedGenId = ref<string | null>(null)
+
+// 重新生成确认弹窗
+const confirmVisible = ref(false)
+const pendingRegen = ref<GenerationItem | null>(null)
+
+function requestRegenerate(gen: GenerationItem) {
+  if (isStreaming.value) return
+  pendingRegen.value = gen
+  confirmVisible.value = true
+}
+
+function confirmRegenerate() {
+  confirmVisible.value = false
+  const gen = pendingRegen.value
+  pendingRegen.value = null
+  if (gen) doRegenerate(gen)
+}
+
+function cancelRegenerate() {
+  confirmVisible.value = false
+  pendingRegen.value = null
+}
 
 const baseLabel = computed(() =>
   selectedBase.value ? `#${selectedBase.value.sequence_num}` : '源文章'
@@ -543,7 +566,7 @@ onUnmounted(() => {
                 :selected-id="selectedGenId"
                 @view="viewGenerationArticle"
                 @select="selectGeneration"
-                @regenerate="doRegenerate"
+                @regenerate="requestRegenerate"
               />
               <p v-if="!displayGenerations.length" class="py-2 text-center text-xs text-text-muted">
                 暂无生成记录
@@ -667,5 +690,13 @@ onUnmounted(() => {
         </div>
       </div>
     </template>
+
+    <ConfirmDialog
+      :visible="confirmVisible"
+      title="重新生成"
+      message="重新生成后当前文章会删除，请问是否确认"
+      @confirm="confirmRegenerate"
+      @cancel="cancelRegenerate"
+    />
   </div>
 </template>
